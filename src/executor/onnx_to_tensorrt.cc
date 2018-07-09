@@ -107,7 +107,6 @@ nvinfer1::ICudaEngine* onnxToTrtCtx(
   auto trt_network = infer_object(trt_builder->createNetwork());
   auto trt_parser  = infer_object(nvonnxparser::createParser(
                                       *trt_network, trt_logger));
-
   ::ONNX_NAMESPACE::ModelProto parsed_model;
   // We check for a valid parse, but the main effect is the side effect
   // of populating parsed_model
@@ -146,11 +145,6 @@ nvinfer1::ICudaEngine* onnxToTrtCtx(
 
   bool fp16 = trt_builder->platformHasFastFp16();
 
-  if ( static_cast<int>(verbosity) >= static_cast<int>(nvinfer1::ILogger::Severity::kWARNING) ) {
-    cout << "Building TensorRT engine, FP16 available:"<< fp16 << endl;
-    cout << "    Max batch size:     " << max_batch_size << endl;
-    cout << "    Max workspace size: " << max_workspace_size / (1024. * 1024) << " MiB" << endl;
-  }
   trt_builder->setMaxBatchSize(max_batch_size);
   trt_builder->setMaxWorkspaceSize(max_workspace_size);
   if ( fp16 && model_dtype == nvinfer1::DataType::kHALF ) {
