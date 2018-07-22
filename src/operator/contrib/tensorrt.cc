@@ -64,10 +64,10 @@ OpStatePtr GetPtrMapping(nvinfer1::ICudaEngine* trt_engine,
   return OpStatePtr::Create<TRTEngineParam>(param);
 }
 
-OpStatePtr TRTCreateState(const nnvm::NodeAttrs& attrs, Context ctx,
-                          const std::vector<TShape>& ishape,
-                          const std::vector<int>& itype) {
-  const TRTParam& node_param = nnvm::get<TRTParam>(attrs.parsed);
+OpStatePtr TRTCreateState(const nnvm::NodeAttrs& attrs, Context /*ctx*/,
+                          const std::vector<TShape>& /*ishape*/,
+                          const std::vector<int>& /*itype*/) {
+  const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
 
   ::onnx::ModelProto model_proto;
   bool success = model_proto.ParseFromString(node_param.serialized_onnx_graph);
@@ -77,7 +77,7 @@ OpStatePtr TRTCreateState(const nnvm::NodeAttrs& attrs, Context ctx,
   auto graph = model_proto.graph();
   auto first_input_type = graph.input(0).type().tensor_type();
   auto dim_value = first_input_type.shape().dim(0).dim_value();
-  uint64_t batch_size = static_cast<uint64_t>(dim_value);
+  auto batch_size = static_cast<int32_t >(dim_value);
   // Need to set up max workspace size based on device properties
   nvinfer1::ICudaEngine* const trt_engine = ::onnx_to_tensorrt::onnxToTrtCtx(
       node_param.serialized_onnx_graph, batch_size, 1 << 30);
@@ -90,8 +90,6 @@ OpStatePtr TRTCreateState(const nnvm::NodeAttrs& attrs, Context ctx,
 }
 
 void TRTParamParser(nnvm::NodeAttrs* attrs) {
-  using namespace mshadow;
-
   TRTParam param_;
 
   try {
@@ -114,26 +112,26 @@ void TRTParamParser(nnvm::NodeAttrs* attrs) {
   attrs->parsed = std::move(param_);
 }
 
-inline bool TRTInferShape(const NodeAttrs& attrs, std::vector<TShape>* in_shape,
+inline bool TRTInferShape(const NodeAttrs& attrs, std::vector<TShape>* /*in_shape*/,
                           std::vector<TShape>* out_shape) {
-  const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+  const auto &node_param = nnvm::get<TRTParam>(attrs.parsed);
   for (auto& el : node_param.output_map) {
     (*out_shape)[std::get<0>(el.second)] = std::get<1>(el.second);
   }
   return true;
 }
 
-inline bool TRTInferStorageType(const NodeAttrs& attrs, const int dev_mask,
+inline bool TRTInferStorageType(const NodeAttrs& /*attrs*/, const int /*dev_mask*/,
                                 DispatchMode* dispatch_mode,
-                                std::vector<int>* in_storage_type,
+                                std::vector<int>* /*in_storage_type*/,
                                 std::vector<int>* out_storage_type) {
   return storage_type_assign(out_storage_type, mxnet::kDefaultStorage,
                              dispatch_mode, DispatchMode::kFCompute);
 }
 
-inline bool TRTInferType(const NodeAttrs& attrs, std::vector<int>* in_dtype,
+inline bool TRTInferType(const NodeAttrs& attrs, std::vector<int>* /*in_dtype*/,
                          std::vector<int>* out_dtype) {
-  const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+  const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
   for (auto& el : node_param.output_map) {
     (*out_dtype)[std::get<0>(el.second)] = std::get<3>(el.second);
   }
@@ -142,7 +140,7 @@ inline bool TRTInferType(const NodeAttrs& attrs, std::vector<int>* in_dtype,
 
 inline std::vector<std::string> TRTListInputNames(const NodeAttrs& attrs) {
   std::vector<std::string> output;
-  const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+  const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
   output.resize(node_param.input_map.size());
   for (auto& el : node_param.input_map) {
     output[el.second] = el.first;
@@ -152,7 +150,7 @@ inline std::vector<std::string> TRTListInputNames(const NodeAttrs& attrs) {
 
 inline std::vector<std::string> TRTListOutputNames(const NodeAttrs& attrs) {
   std::vector<std::string> output;
-  const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+  const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
   output.resize(node_param.output_map.size());
   for (auto& el : node_param.output_map) {
     output[std::get<0>(el.second)] = el.first;
@@ -164,11 +162,11 @@ NNVM_REGISTER_OP(_trt_op)
     .describe(R"code(TRT operation (one engine)
 )code" ADD_FILELINE)
     .set_num_inputs([](const NodeAttrs& attrs) {
-      const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+      const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
       return node_param.input_map.size();
     })
     .set_num_outputs([](const NodeAttrs& attrs) {
-      const auto node_param = nnvm::get<TRTParam>(attrs.parsed);
+      const auto& node_param = nnvm::get<TRTParam>(attrs.parsed);
       return node_param.output_map.size();
     })
     .set_attr_parser(TRTParamParser)

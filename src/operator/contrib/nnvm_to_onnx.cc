@@ -38,7 +38,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "./tensorrt-inl.h"
 #include "../../common/serialization.h"
 #include "../../common/utils.h"
 #include "../../ndarray/ndarray_function.h"
@@ -48,8 +47,11 @@
 #include "../../operator/nn/fully_connected-inl.h"
 #include "../../operator/nn/pooling-inl.h"
 #include "../../operator/softmax_output-inl.h"
+#include "./tensorrt-inl.h"
 
-// #include <onnx/checker.h>
+#if MXNET_USE_TENSORRT_ONNX_CHECKER
+#include <onnx/checker.h>
+#endif  // MXNET_USE_TENSORRT_ONNX_CHECKER
 
 namespace mxnet {
 namespace op {
@@ -63,10 +65,9 @@ op::TRTParam ConvertNnvmGraphToOnnx(
     op::tensorrt::InferenceMap_t trt_output_map;
 
   const nnvm::IndexedGraph& ig = g.indexed_graph();
-  const StorageTypeVector& storage_types =
-      g.GetAttr<StorageTypeVector>("storage_type");
-  const DTypeVector& dtypes = g.GetAttr<DTypeVector>("dtype");
-  const ShapeVector& shape_inputs = g.GetAttr<ShapeVector>("shape_inputs");
+  const auto& storage_types = g.GetAttr<StorageTypeVector>("storage_type");
+  const auto& dtypes = g.GetAttr<DTypeVector>("dtype");
+  const auto& shape_inputs = g.GetAttr<ShapeVector>("shape_inputs");
 
   for (auto& e : storage_types) {
     if (e != mshadow::kFloat32) {
@@ -79,15 +80,13 @@ op::TRTParam ConvertNnvmGraphToOnnx(
   // Need to determine IR versions and features to support
   model_proto.set_ir_version(static_cast<int64>(2));
   GraphProto* graph_proto = model_proto.mutable_graph();
-  //  graph_proto->set_name(graph_name);
 
   std::unordered_map<std::string, TShape> placeholder_shapes =
       GetPlaceholderShapes(shape_inputs, ig);
   std::unordered_map<std::string, uint32_t> output_lookup = GetOutputLookup(ig);
   uint32_t current_input = 0;
 
-  // can't do a foreach over IndexedGraph since it doesn't
-  // implement begin(), etc.
+  // Can't do a foreach over IndexedGraph since it doesn't implement begin(), etc.
   for (uint32_t node_idx = 0; node_idx < ig.num_nodes(); ++node_idx) {
     const IndexedGraph::Node& node = ig[node_idx];
     const nnvm::Node* source = node.source;
@@ -95,13 +94,12 @@ op::TRTParam ConvertNnvmGraphToOnnx(
     const Op* op = source->op();
 
     std::string node_name = attrs.name;
-    // Here, "variable" actually means anything that's not an op,
-    // i.e. a constant (weights) or a placeholder
+    // Here, "variable" actually means anything that's not an op i.e. a constant (weights) or a
+    // placeholder
     if (source->is_variable()) {
       // Is this a placeholder?
       if (shared_buffer->count(node_name) == 0) {
-        // This fixes the problem with a SoftmaxOutput node during inference,
-        // but it's hacky.
+        // This fixes the problem with a SoftmaxOutput node during inference, but it's hacky.
         // Need to figure out how to properly fix it.
         if (node_name.find("label") != std::string::npos) {
           current_input++;
@@ -122,16 +120,15 @@ op::TRTParam ConvertNnvmGraphToOnnx(
                    << node_name << ") "
                    << " is not supported yet.";
       }
-      // Find function ptr to a converter based on the op name, and
-      // invoke the converter. This looks unsafe because find may not
-      // succeed, but it does because we're in the operator logic after
-      // testing that this node name does not represent a variable.
+      // Find function ptr to a converter based on the op name, and invoke the converter. This
+      // looks unsafe because find may not succeed, but it does because we're in the operator
+      // logic after testing that this node name does not represent a variable.
       converter_map.find(op->name)->second(node_proto, attrs, ig, node.inputs);
       // Add all inputs to the current node (i.e. add graph edges)
       for (const nnvm::IndexedGraph::NodeEntry& entry : node.inputs) {
         std::string in_node_name = ig[entry.node_id].source->attrs.name;
-        // As before, we're not adding labels e.g. for SoftmaxOutput,
-        // but I wish there was a less hacky way to do it than name matching.
+        // As before, we're not adding labels e.g. for SoftmaxOutput, but I wish there was a less
+        // hacky way to do it than name matching.
         if (in_node_name.find("label") != std::string::npos) {
           continue;
         }
@@ -154,15 +151,18 @@ op::TRTParam ConvertNnvmGraphToOnnx(
                                           &trt_param.serialized_input_map);
   common::Serialize<op::tensorrt::InferenceMap_t>(trt_output_map,
                                              &trt_param.serialized_output_map);
-  //  onnx::checker::check_model(model_proto);
+
+#if MXNET_USE_TENSORRT_ONNX_CHECKER
+  onnx::checker::check_model(model_proto);
+#endif  // MXNET_USE_TENSORRT_ONNX_CHECKER
+
   return trt_param;
 }
 
 void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
-                        const nnvm::IndexedGraph& ig,
-                        const array_view<IndexedGraph::NodeEntry>& inputs) {
-  const op::ConvolutionParam& conv_param =
-      nnvm::get<op::ConvolutionParam>(attrs.parsed);
+                        const nnvm::IndexedGraph& /*ig*/,
+                        const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
+  const auto& conv_param = nnvm::get<op::ConvolutionParam>(attrs.parsed);
 
   node_proto->set_op_type("Conv");
 
@@ -179,7 +179,7 @@ void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
   kernel_shape->set_name("kernel_shape");
   kernel_shape->set_type(AttributeProto::INTS);
 
-  for (int kval : kernel) {
+  for (const dim_t kval : kernel) {
     kernel_shape->add_ints(static_cast<int64>(kval));
   }
 
@@ -188,7 +188,7 @@ void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
   pads->set_name("pads");
   pads->set_type(AttributeProto::INTS);
 
-  for (int kval : pad) {
+  for (const dim_t kval : pad) {
     pads->add_ints(static_cast<int64>(kval));
     pads->add_ints(static_cast<int64>(kval));
   }
@@ -197,7 +197,7 @@ void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
   AttributeProto* const dilations = node_proto->add_attribute();
   dilations->set_name("dilations");
   dilations->set_type(AttributeProto::INTS);
-  for (int kval : dilate) {
+  for (const dim_t kval : dilate) {
     dilations->add_ints(static_cast<int64>(kval));
   }
 
@@ -205,7 +205,7 @@ void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
   AttributeProto* const strides = node_proto->add_attribute();
   strides->set_name("strides");
   strides->set_type(AttributeProto::INTS);
-  for (int kval : stride) {
+  for (const dim_t kval : stride) {
     strides->add_ints(static_cast<int64>(kval));
   }
 
@@ -217,10 +217,9 @@ void ConvertConvolution(NodeProto* node_proto, const NodeAttrs& attrs,
 }  // end ConvertConvolution
 
 void ConvertPooling(NodeProto* node_proto, const NodeAttrs& attrs,
-                    const nnvm::IndexedGraph& ig,
-                    const array_view<IndexedGraph::NodeEntry>& inputs) {
-  const op::PoolingParam& pooling_param =
-      nnvm::get<op::PoolingParam>(attrs.parsed);
+                    const nnvm::IndexedGraph& /*ig*/,
+                    const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
+  const auto& pooling_param = nnvm::get<op::PoolingParam>(attrs.parsed);
 
   const TShape kernel = pooling_param.kernel;
   const TShape stride = pooling_param.stride;
@@ -235,47 +234,44 @@ void ConvertPooling(NodeProto* node_proto, const NodeAttrs& attrs,
       node_proto->set_op_type("GlobalAveragePool");
     }
     return;
-
-  } else {
-    // kernel_shape
-    AttributeProto* const kernel_shape = node_proto->add_attribute();
-    kernel_shape->set_name("kernel_shape");
-    kernel_shape->set_type(AttributeProto::INTS);
-    for (int kval : kernel) {
-      kernel_shape->add_ints(static_cast<int64>(kval));
-    }
-
-    // pads
-    AttributeProto* const pads = node_proto->add_attribute();
-    pads->set_name("pads");
-    pads->set_type(AttributeProto::INTS);
-    for (int kval : pad) {
-      pads->add_ints(static_cast<int64>(kval));
-    }
-
-    // strides
-    AttributeProto* const strides = node_proto->add_attribute();
-    strides->set_name("strides");
-    strides->set_type(AttributeProto::INTS);
-    for (int kval : stride) {
-      strides->add_ints(static_cast<int64>(kval));
-    }
-
-    if (pool_type == 0) {
-      node_proto->set_op_type("MaxPool");
-
-    } else {
-      node_proto->set_op_type("AveragePool");
-    }  // average pooling
-    // not global pooling
   }
+
+  // kernel_shape
+  AttributeProto* const kernel_shape = node_proto->add_attribute();
+  kernel_shape->set_name("kernel_shape");
+  kernel_shape->set_type(AttributeProto::INTS);
+  for (int kval : kernel) {
+    kernel_shape->add_ints(static_cast<int64>(kval));
+  }
+
+  // pads
+  AttributeProto* const pads = node_proto->add_attribute();
+  pads->set_name("pads");
+  pads->set_type(AttributeProto::INTS);
+  for (int kval : pad) {
+    pads->add_ints(static_cast<int64>(kval));
+  }
+
+  // strides
+  AttributeProto* const strides = node_proto->add_attribute();
+  strides->set_name("strides");
+  strides->set_type(AttributeProto::INTS);
+  for (int kval : stride) {
+    strides->add_ints(static_cast<int64>(kval));
+  }
+
+  if (pool_type == 0) {
+    node_proto->set_op_type("MaxPool");
+  } else {
+    node_proto->set_op_type("AveragePool");
+  }  // average pooling
+  // not global pooling
 }  // end ConvertPooling
 
 void ConvertActivation(NodeProto* node_proto, const NodeAttrs& attrs,
-                       const nnvm::IndexedGraph& ig,
-                       const array_view<IndexedGraph::NodeEntry>& inputs) {
-  const op::ActivationParam& act_param =
-      nnvm::get<op::ActivationParam>(attrs.parsed);
+                       const nnvm::IndexedGraph& /*ig*/,
+                       const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
+  const auto& act_param = nnvm::get<op::ActivationParam>(attrs.parsed);
   std::string act_type;
   switch (act_param.act_type) {
     case op::activation::kReLU:
@@ -299,10 +295,9 @@ void ConvertActivation(NodeProto* node_proto, const NodeAttrs& attrs,
 }
 
 void ConvertFullyConnected(NodeProto* node_proto, const NodeAttrs& attrs,
-                           const nnvm::IndexedGraph& ig,
-                           const array_view<IndexedGraph::NodeEntry>& inputs) {
-  const op::FullyConnectedParam &act_param =
-      nnvm::get<op::FullyConnectedParam>(attrs.parsed);
+                           const nnvm::IndexedGraph& /*ig*/,
+                           const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
+  const auto& act_param = nnvm::get<op::FullyConnectedParam>(attrs.parsed);
   if (act_param.no_bias) {
       node_proto->set_op_type("MatMul");
   } else {
@@ -335,34 +330,28 @@ void ConvertFullyConnected(NodeProto* node_proto, const NodeAttrs& attrs,
   }
 }
 
-void ConvertSoftmaxOutput(NodeProto* node_proto, const NodeAttrs& attrs,
-                          const nnvm::IndexedGraph& ig,
-                          const array_view<IndexedGraph::NodeEntry>& inputs) {
+void ConvertSoftmaxOutput(NodeProto* node_proto, const NodeAttrs& /*attrs*/,
+                          const nnvm::IndexedGraph& /*ig*/,
+                          const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
   node_proto->set_op_type("Softmax");
 
-  // Setting by default to 1 since MXNet doesn't provide such an attribute
-  // for softmax
-  // in its node params. This attribute is only relevant when the input is
-  // coerced
-  // to 2D, and in that case dimension 0 is assumed to be the batch
-  // dimension.
+  // Setting by default to 1 since MXNet doesn't provide such an attribute for softmax in its
+  // node params. This attribute is only relevant when the input is coerced to 2D, and in that
+  // case dimension 0 is assumed to be the batch dimension.
   AttributeProto* const axis = node_proto->add_attribute();
   axis->set_name("axis");
   axis->set_type(AttributeProto::INT);
   axis->set_i(1);
 }
 
-void ConvertFlatten(NodeProto* node_proto, const NodeAttrs& attrs,
-                    const nnvm::IndexedGraph& ig,
-                    const array_view<IndexedGraph::NodeEntry>& inputs) {
+void ConvertFlatten(NodeProto* node_proto, const NodeAttrs& /*attrs*/,
+                    const nnvm::IndexedGraph& /*ig*/,
+                    const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
   node_proto->set_op_type("Flatten");
 
-  // Setting by default to 1 since MXNet doesn't provide such an attribute
-  // for Flatten
-  // in its node params. This attribute is only relevant when the input is
-  // coerced
-  // to 2D, and in that case dimension 0 is assumed to be the batch
-  // dimension.
+  // Setting by default to 1 since MXNet doesn't provide such an attribute for Flatten in its
+  // node params. This attribute is only relevant when the input is coerced to 2D, and in that
+  // case dimension 0 is assumed to be the batch dimension.
   AttributeProto* const axis = node_proto->add_attribute();
   axis->set_name("axis");
   axis->set_type(AttributeProto::INT);
@@ -370,10 +359,10 @@ void ConvertFlatten(NodeProto* node_proto, const NodeAttrs& attrs,
 }
 
 void ConvertBatchNorm(NodeProto* node_proto, const NodeAttrs& attrs,
-                      const nnvm::IndexedGraph& ig,
-                      const array_view<IndexedGraph::NodeEntry>& inputs) {
+                      const nnvm::IndexedGraph& /*ig*/,
+                      const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
   node_proto->set_op_type("BatchNormalization");
-  const op::BatchNormParam& param = nnvm::get<op::BatchNormParam>(attrs.parsed);
+  const auto& param = nnvm::get<op::BatchNormParam>(attrs.parsed);
 
   AttributeProto* const epsilon = node_proto->add_attribute();
   epsilon->set_name("epsilon");
@@ -405,9 +394,9 @@ void ConvertBatchNorm(NodeProto* node_proto, const NodeAttrs& attrs,
   }
 }
 
-void ConvertElementwiseAdd(NodeProto* node_proto, const NodeAttrs& attrs,
-                           const nnvm::IndexedGraph& ig,
-                           const array_view<IndexedGraph::NodeEntry>& inputs) {
+void ConvertElementwiseAdd(NodeProto* node_proto, const NodeAttrs& /*attrs*/,
+                           const nnvm::IndexedGraph& /*ig*/,
+                           const array_view<IndexedGraph::NodeEntry>& /*inputs*/) {
   node_proto->set_op_type("Add");
   AttributeProto* const axis = node_proto->add_attribute();
   axis->set_name("axis");
@@ -476,14 +465,9 @@ void ConvertConstant(
   node_proto->set_op_type("Constant");
 
   const NDArray nd = shared_buffer->find(node_name)->second;
-  const TBlob blob = nd.data();
+  const TBlob& blob = nd.data();
   const TShape shape = blob.shape_;
-  // const int type_flag = blob.type_flag_;
   const int32_t size = shape.Size();
-
-  // Use MSHADOW_TYPE_SWITCH for e.g. fp16 support !!!
-  // const int dev_mask = blob.dev_mask();
-  // const int dev_id = blob.dev_id();
 
   std::shared_ptr<float> shared_data_ptr(new float[size]);
   float* const data_ptr = shared_data_ptr.get();
